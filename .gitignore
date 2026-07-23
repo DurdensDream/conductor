@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+
+# Env / secrets
+.env
+*.local.env
+.env.*
+!.env.example
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+npm-debug.log*
+
+# Data / artifacts
+*.metrics.json
+metrics.json
+*.log
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
