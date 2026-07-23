@@ -15,6 +15,7 @@ dependencies = [
     "langchain-core>=1.0,<2",
     # app postgres + pgvector dedup corpus
     "psycopg[binary]>=3.2",
+    "psycopg-pool>=3.2",
     "pgvector>=0.3",
     # control-plane API
     "fastapi>=0.115",
