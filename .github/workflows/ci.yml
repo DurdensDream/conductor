@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Fast, hermetic: lint + unit tests + the time-skipping workflow tests (fake providers,
+  # no services). The chaos test auto-skips here (no CONDUCTOR_CHAOS).
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package (+dev)
+        run: pip install ./python[dev]
+      - name: Ruff
+        run: cd python && ruff check conductor tests
+      - name: Unit + workflow tests
+        run: cd python && python -m pytest -q
+
+  # The eval gate — fails the merge if trajectory/task-success/validity fall below floors.
+  eval-gate:
+    runs-on: ubuntu-latest
+    needs: lint-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package
+        run: pip install ./python
+      - name: Run eval gate
+        env:
+          LLM_PROVIDER: fake
+          EMBEDDER: fake
+          OTEL_ENABLED: "false"
+        run: cd python && python -m conductor.eval --gate --out metrics.json
+      - name: Upload metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-metrics
+          path: python/metrics.json
+
+  # The reliability proof: real Temporal + pgvector, SIGKILL the worker mid-run, assert
+  # it resumes with identical output and no duplicate side effects.
+  chaos:
+    runs-on: ubuntu-latest
+    needs: lint-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Start Temporal + pgvector
+        run: docker compose up -d temporal app-db
+      - name: Install package
+        run: pip install ./python
+      - name: Wait for Temporal to be healthy
+        run: |
+          for i in $(seq 1 40); do
+            s=$(docker inspect --format '{{.State.Health.Status}}' conductor-temporal-1 2>/dev/null || echo none)
+            echo "temporal: $s"; [ "$s" = "healthy" ] && break; sleep 3
+          done
+      - name: Chaos test (SIGKILL worker -> resume)
+        env:
+          CONDUCTOR_CHAOS: "1"
+          TEMPORAL_ADDRESS: localhost:7233
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: "5433"
+          LLM_PROVIDER: fake
+          EMBEDDER: fake
+          OTEL_ENABLED: "false"
+        run: cd python && python -m pytest tests/test_chaos.py -q -s
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --tail 100
+
+  ui-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Install + build
+        run: cd ui && npm ci && NEXT_TELEMETRY_DISABLED=1 npm run build

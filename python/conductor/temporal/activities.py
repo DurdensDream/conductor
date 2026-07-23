@@ -10,6 +10,7 @@ Activities are plain functions here (registered from the worker) that close over
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 
 from temporalio import activity
@@ -21,9 +22,12 @@ from ..db.store import Store
 from ..embed.base import Embedder
 from ..llm.base import LLMClient
 from ..models import RawPosting
+from ..obs.telemetry import T
 from ..settings import get_settings
 from ..tools.registry import ToolContext, run_tool
 from . import shared
+
+_TERMINAL = {"COMPLETED", "REJECTED", "CANCELLED", "REVIEW_TIMED_OUT", "FAILED_VALIDATION"}
 
 log = logging.getLogger("conductor.activity")
 
@@ -78,7 +82,9 @@ def build_activities(deps: Deps) -> list:
     @activity.defn(name=shared.ACT_RUN_TOOL)
     def run_tool_activity(name: str, posting: dict, observations: dict, seq: int) -> dict:
         p = RawPosting.model_validate(posting)
+        t0 = time.perf_counter()
         out = run_tool(name, p, deps.ctx, observations)
+        T.record_tool(name, time.perf_counter() - t0)
         result = out.model_dump()
         _audit(p.external_id, seq, f"tool:{name}", "ok", {"tool": name})
         return result
@@ -120,6 +126,8 @@ def build_activities(deps: Deps) -> list:
     @activity.defn(name=shared.ACT_RECORD_EVENT)
     def record_event(external_id: str, seq: int, step: str, status: str, detail: dict) -> None:
         _audit(external_id, seq, step, status, detail or {})
+        if status in _TERMINAL:
+            T.count_run(status)
 
     return [validate_input, agent_decide, run_tool_activity, check_policy_activity,
             finalize_record, persist_record, record_event]

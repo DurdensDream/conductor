@@ -81,8 +81,11 @@ class FakeLLM(LLMClient):
     # ---- classification --------------------------------------------------------------
     def _category(self, user: str) -> dict:
         text = user.lower()
+        # Whole-word match for single-token keywords (so "rn" doesn't match "lea*rn*ing"),
+        # substring for multi-word phrases ("machine learning", "account executive").
+        tokens = set(re.findall(r"[a-z0-9]+", text))
         for keywords, code, label in _CATEGORY_RULES:
-            if any(k in text for k in keywords):
+            if any((k in text) if " " in k else (k in tokens) for k in keywords):
                 return {"onet_code": code, "label": label, "confidence": 0.85}
         return {"onet_code": _DEFAULT_CATEGORY[0], "label": _DEFAULT_CATEGORY[1], "confidence": 0.3}
 

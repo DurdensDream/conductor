@@ -17,6 +17,7 @@ from temporalio.worker import Worker
 from ..db.pg import PgStore, init_schema
 from ..embed.base import get_embedder
 from ..llm.factory import get_generation_llm
+from ..llm.metered import MeteredLLM
 from ..obs.telemetry import T
 from ..settings import get_settings
 from .activities import Deps, build_activities
@@ -38,7 +39,7 @@ async def main() -> None:
 
     deps = Deps(
         store=store,
-        llm=get_generation_llm(),
+        llm=MeteredLLM(get_generation_llm()),  # emit token/cost/latency metrics on every call
         embedder=get_embedder(),
         dedup_k=5,
         dedup_threshold=s.dedup_score_threshold,

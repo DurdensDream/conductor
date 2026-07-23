@@ -13,6 +13,20 @@ from ..settings import get_settings
 log = logging.getLogger("conductor.temporal.client")
 
 
+def _interceptors():
+    """Temporal's OTel interceptor emits a span per workflow + activity, parenting them so
+    Jaeger shows the whole run as one trace. Only attached when telemetry is on."""
+    if not get_settings().otel_enabled:
+        return []
+    try:
+        from temporalio.contrib.opentelemetry import TracingInterceptor
+
+        return [TracingInterceptor()]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("temporal OTel interceptor unavailable: %s", exc)
+        return []
+
+
 async def connect_ready(timeout_seconds: float | None = None) -> Client:
     s = get_settings()
     timeout = s.startup_connect_timeout_seconds if timeout_seconds is None else timeout_seconds
@@ -21,7 +35,9 @@ async def connect_ready(timeout_seconds: float | None = None) -> Client:
     last: Exception | None = None
     while loop.time() < deadline:
         try:
-            client = await Client.connect(s.temporal_address, namespace=s.temporal_namespace)
+            client = await Client.connect(
+                s.temporal_address, namespace=s.temporal_namespace, interceptors=_interceptors()
+            )
             # A real round-trip confirms the namespace is actually serving, not just TCP-up.
             async for _ in client.list_workflows():
                 break

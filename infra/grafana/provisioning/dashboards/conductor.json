@@ -1,0 +1,69 @@
+{
+  "title": "Conductor — Agent Runs & Cost",
+  "uid": "conductor-main",
+  "schemaVersion": 39,
+  "editable": true,
+  "time": { "from": "now-30m", "to": "now" },
+  "refresh": "5s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Runs by outcome (rate)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "sum by (outcome) (rate(conductor_runs_total[1m]))", "legendFormat": "{{outcome}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Total runs by outcome",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "sum by (outcome) (conductor_runs_total)", "legendFormat": "{{outcome}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Tool latency p95 (s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, tool) (rate(conductor_tool_latency_seconds_bucket[5m])))",
+          "legendFormat": "{{tool}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "LLM tokens (rate, by direction)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        { "expr": "sum by (direction) (rate(conductor_llm_tokens_total[1m]))", "legendFormat": "{{direction}}" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "LLM cost (USD, cumulative)",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 16 },
+      "targets": [{ "expr": "sum(conductor_llm_cost_usd_total)", "legendFormat": "cost" }]
+    },
+    {
+      "id": 6,
+      "title": "Pending review queue depth",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 16 },
+      "targets": [{ "expr": "sum(conductor_review_pending)", "legendFormat": "pending" }]
+    }
+  ]
+}

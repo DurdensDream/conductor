@@ -1,0 +1,21 @@
+# The app sends traces straight to Jaeger (OTLP) and metrics here. This collector receives
+# metrics over OTLP and re-exposes them for Prometheus to scrape at :8889.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch: {}
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]
