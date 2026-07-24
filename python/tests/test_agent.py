@@ -5,10 +5,11 @@ review. Deterministic via the FakeLLM."""
 from __future__ import annotations
 
 from conductor.agent.finalize import compute_confidence, needs_human_review
+from conductor.agent.graph import _valid
 from conductor.agent.runner import run_agent
 from conductor.embed.fake import HashEmbedder
 from conductor.llm.fake import FakeLLM
-from conductor.models import EnrichedPosting, RawPosting
+from conductor.models import AgentAction, AgentDecision, EnrichedPosting, RawPosting
 from conductor.tools.dedup_index import InMemoryIndex
 from conductor.tools.registry import ToolContext
 
@@ -64,3 +65,19 @@ def test_confidence_penalizes_unresolved_location():
     low = compute_confidence(p, obs)
     review, _ = needs_human_review(p, obs, 0.7)
     assert low < 0.7 and review
+
+
+def test_valid_rejects_tool_whose_input_is_absent():
+    # Regression for the parse_salary-None crash: _valid must not accept a tool whose only
+    # input field is missing, even if a (real) LLM proposes it. Otherwise run_tool would
+    # return None and the activity would crash on .model_dump().
+    no_salary = {"title": "Backend Dev", "salary_raw": "", "location_raw": "London"}
+    assert not _valid(AgentDecision(action=AgentAction.CALL_TOOL, tool="parse_salary"), [], no_salary)
+    assert _valid(AgentDecision(action=AgentAction.CALL_TOOL, tool="classify_category"), [], no_salary)
+    no_loc = {"title": "Backend Dev", "salary_raw": "$90k", "location_raw": ""}
+    assert not _valid(AgentDecision(action=AgentAction.CALL_TOOL, tool="normalize_location"), [], no_loc)
+    assert _valid(AgentDecision(action=AgentAction.CALL_TOOL, tool="parse_salary"), [], no_loc)
+    # finish is always valid; an already-run tool is not.
+    assert _valid(AgentDecision(action=AgentAction.FINISH), ["classify_category"], no_salary)
+    assert not _valid(AgentDecision(action=AgentAction.CALL_TOOL, tool="classify_category"),
+                      ["classify_category"], no_salary)

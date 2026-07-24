@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS postings (
 -- window between its side effect and Temporal recording completion) inserts with the
 -- same key and is a no-op — so "no duplicate side effects" is enforced by the schema,
 -- not hoped for. The chaos test asserts exactly one row per logical step.
+-- idempotency_key embeds the workflow_run_id (see activities._audit), so two runs of the
+-- same workflow_id (a re-submitted external_id) keep separate, non-colliding audit trails.
 CREATE TABLE IF NOT EXISTS audit_log (
     id              BIGSERIAL PRIMARY KEY,
     workflow_id     TEXT        NOT NULL,

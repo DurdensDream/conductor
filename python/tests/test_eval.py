@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from conductor.eval.gate import THRESHOLDS, evaluate_gate
 from conductor.eval.harness import run_gold
-from conductor.eval.metrics import _traj_prf, compute_metrics
+from conductor.eval.metrics import _traj_prf, compute_metrics, validate_record
 
 
 def test_gold_set_passes_gate():
@@ -14,6 +14,7 @@ def test_gold_set_passes_gate():
     assert ok, failures
     assert metrics["n_cases"] >= 15
     assert metrics["output_validity"] == 1.0
+    assert metrics["review_routing_accuracy"] == 1.0
 
 
 def test_gate_fails_on_empty_gold_set():
@@ -39,10 +40,38 @@ def test_gate_fails_below_floor():
 def test_judge_floor_only_enforced_when_present():
     # No llm_judge_quality key -> not enforced even though it's in THRESHOLDS.
     assert "llm_judge_quality" in THRESHOLDS
-    metrics = {"n_cases": 10, "task_success": 1.0, "tool_selection_f1": 1.0,
-               "tool_selection_exact_order": 1.0, "output_validity": 1.0}
+    metrics = {"n_cases": 10, "task_success": 1.0, "review_routing_accuracy": 1.0,
+               "tool_selection_f1": 1.0, "tool_selection_exact_order": 1.0, "output_validity": 1.0}
     ok, _ = evaluate_gate(metrics)
     assert ok
+
+
+def test_gate_fails_when_review_routing_broken():
+    # A router that mis-routes (auto-ships what should escalate) must trip the gate even if
+    # the lenient mean task_success stays high — this is the whole point of gating routing.
+    metrics = {"n_cases": 18, "task_success": 0.95, "review_routing_accuracy": 0.50,
+               "tool_selection_f1": 1.0, "output_validity": 1.0}
+    ok, failures = evaluate_gate(metrics)
+    assert not ok
+    assert any("review_routing_accuracy" in f for f in failures)
+
+
+def test_gate_requires_review_routing_metric():
+    # Missing the routing metric entirely (renamed key) fails, not passes vacuously.
+    metrics = {"n_cases": 18, "task_success": 1.0, "tool_selection_f1": 1.0, "output_validity": 1.0}
+    ok, failures = evaluate_gate(metrics)
+    assert not ok
+    assert any("review_routing_accuracy missing" in f for f in failures)
+
+
+def test_validate_record_enforces_business_invariants():
+    good = {"external_id": "x", "title": "Engineer", "location": {}, "category": {},
+            "remote_type": "REMOTE", "confidence": 0.8, "trajectory": ["classify_category"]}
+    assert validate_record(good)
+    # schema-valid but semantically empty variants must be rejected
+    assert not validate_record({**good, "title": ""})
+    assert not validate_record({**good, "external_id": ""})
+    assert not validate_record({**good, "trajectory": []})
 
 
 def test_trajectory_f1():

@@ -63,12 +63,17 @@ def normalize_location(posting: RawPosting) -> Location:
             city = None if candidate.lower() == "remote" else candidate.title()
             resolved = bool(city or country)
             break
-    if not resolved and parts:
-        # Fall back to positional parse: first token = city, last = country.
+    if not resolved and len(parts) >= 2:
+        # Structured "City, ..., Country" we couldn't geocode: accept as best-effort resolved
+        # (we at least have a claimed country to show).
         city = parts[0].title()
-        if len(parts) >= 2:
-            country = parts[-1].title()
+        country = parts[-1].title()
         resolved = True
+    elif not resolved and parts:
+        # A single unrecognized token (not in the geocoder, no structure): record it for
+        # display but leave resolved=False, so the confidence gate routes it to a human
+        # instead of fabricating a resolution for arbitrary junk.
+        city = parts[0].title()
 
     if remote_type == RemoteType.REMOTE and not resolved:
         resolved = True  # "Remote" is a resolved location even without a city

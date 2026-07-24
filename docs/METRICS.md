@@ -10,18 +10,22 @@ The gate runs the gold set (18 cases spanning clean / policy-block / ambiguous /
 | Metric | Floor (gate) | Observed (fake) | What it measures |
 |---|---|---|---|
 | `task_success` | 0.90 | **1.000** | mean field-level accuracy (category, remote, salary-parsed, location-resolved, review-routing) |
-| `task_success_strict` | — | 1.000 | fraction of cases with *every* field correct |
+| `task_success_strict` | 0.75 | **1.000** | fraction of cases with *every* field correct (no partial credit) |
+| `review_routing_accuracy` | 0.90 | **1.000** | fraction where `needs_review` matches expected — the auto-ship-vs-escalate call, scored on its own |
 | `tool_selection_f1` | 0.90 | **1.000** | trajectory set-F1 vs the expected tool set |
 | `tool_selection_exact_order` | 0.80 | **1.000** | fraction with the exact tool order |
-| `output_validity` | 0.99 | **1.000** | fraction producing a schema-valid `EnrichedPosting` |
+| `output_validity` | 0.99 | **1.000** | fraction whose record survives a JSON persist/reload round-trip **and** business invariants (non-blank id/title, confidence∈[0,1], non-empty trajectory) — not a re-validation of the just-built object |
 | `llm_judge_quality` | 0.60 | (only with `--judge`) | LLM-as-judge enrichment quality; enforced *only when computed* |
 | `avg_tokens_per_run` | — | ~1576 | cost proxy (fake tokens are estimated) |
 | `cost_per_run_usd` | — | 0.0 | 0 on local/fake; real under `anthropic` |
 
 The floors sit below the deterministic means with headroom so a **live** model
 (`LLM_PROVIDER=ollama|anthropic`) can be noisier without flapping the build. `task_success`,
-`tool_selection_f1`, and `output_validity` are **required** — a missing key or an empty gold
-set (`n_cases = 0`) fails the gate rather than passing vacuously.
+`review_routing_accuracy`, `tool_selection_f1`, and `output_validity` are **required** — a
+missing key or an empty gold set (`n_cases = 0`) fails the gate rather than passing vacuously.
+`review_routing_accuracy` is gated *separately* from the lenient mean so a broken router
+(auto-shipping everything, or dumping everything on a human) trips the build even though
+routing is only one of the five fields inside `task_success`.
 
 ## Reliability (the headline outcome)
 

@@ -69,10 +69,20 @@ def build_prompt(state: DecisionState) -> str:
     )
 
 
-def _valid(decision: AgentDecision, tools_run: list[str]) -> bool:
+def _valid(decision: AgentDecision, tools_run: list[str], posting: dict) -> bool:
     if decision.action == AgentAction.FINISH:
         return True
-    return decision.tool in AGENT_TOOLS and decision.tool not in tools_run
+    if decision.tool not in AGENT_TOOLS or decision.tool in tools_run:
+        return False
+    # Field-presence gate (mirrors _fallback): a tool whose only input is absent must not be
+    # selectable — otherwise a real LLM picking parse_salary on a posting with no salary_raw
+    # would run a tool that returns nothing. Keeps the agent's choices executable.
+    present = set(_present_fields(posting))
+    if decision.tool == "parse_salary" and "salary_raw" not in present:
+        return False
+    if decision.tool == "normalize_location" and "location_raw" not in present:
+        return False
+    return True
 
 
 def _fallback(tools_run: list[str], posting: dict) -> AgentDecision:
@@ -113,7 +123,7 @@ def build_agent_graph(llm: LLMClient):
 
     def route(state: DecisionState) -> str:
         decision = AgentDecision.model_validate(state["decision"])
-        if _valid(decision, state.get("tools_run", [])):
+        if _valid(decision, state.get("tools_run", []), state["posting"]):
             return "ok"
         return "retry" if state.get("attempts", 0) < 2 else "repair"
 

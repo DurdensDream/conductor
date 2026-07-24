@@ -1,4 +1,4 @@
-.PHONY: up down logs obs-up test lint eval chaos ui-build fmt venv
+.PHONY: up down nuke logs obs-up test lint eval chaos ui-build fmt venv
 
 # ---- stack ----
 up:            ## boot the base stack (Temporal + Postgres + worker + API + UI)
@@ -7,7 +7,10 @@ up:            ## boot the base stack (Temporal + Postgres + worker + API + UI)
 obs-up:        ## boot everything incl. Jaeger + Prometheus + Grafana
 	OTEL_ENABLED=true docker compose --profile obs up -d --build
 
-down:          ## stop everything and remove volumes
+down:          ## stop everything, KEEPING durable volumes (records/audit/dedup + workflow history)
+	docker compose --profile obs down
+
+nuke:          ## stop everything AND delete volumes (destroys all durable state) — explicit on purpose
 	docker compose --profile obs down -v
 
 logs:

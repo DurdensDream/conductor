@@ -79,9 +79,11 @@ constraint). See [`tests/test_chaos.py`](python/tests/test_chaos.py).
 ## Published metrics
 
 Full table in [docs/METRICS.md](docs/METRICS.md). Under the deterministic CI provider:
-`task_success` **1.00** (floor 0.90), `tool_selection_f1` **1.00** (0.90), `output_validity`
-**1.00** (0.99). **~61%** of gold postings auto-resolve with no human touch; the rest route
-correctly. **0** lost/duplicated runs across injected worker crashes.
+`task_success` **1.00** (floor 0.90), `review_routing_accuracy` **1.00** (0.90),
+`tool_selection_f1` **1.00** (0.90), `output_validity` **1.00** (0.99). Routing is gated
+*separately* from the lenient mean, so a router that auto-ships everything (or escalates
+everything) fails the build. **~61%** of gold postings auto-resolve with no human touch; the
+rest route correctly. **0** lost/duplicated runs across injected worker crashes.
 
 ---
 

@@ -56,11 +56,17 @@ def build_activities(deps: Deps) -> list:
     """Return the list of @activity.defn callables bound to `deps`, for Worker registration."""
     graph = build_agent_graph(deps.llm)
 
-    def _audit(external_id: str, seq: int, step: str, status: str, detail: dict) -> None:
-        wf_id = activity.info().workflow_id
-        newly = deps.store.append_audit(wf_id, external_id, _key(seq, step), seq, step, status, detail)
+    def _audit(external_id: str, seq: int, step: str, status: str, detail: dict) -> bool:
+        # Scope the idempotency key to the *run*, not just the workflow: re-submitting the
+        # same external_id starts a new run under the same workflow_id, and a workflow-only
+        # key would collide with the prior run's rows and silently drop the new run's audit.
+        # workflow_run_id is stable across a worker crash/replay, so per-step dedup still holds.
+        info = activity.info()
+        key = f"{info.workflow_run_id}:{_key(seq, step)}"
+        newly = deps.store.append_audit(info.workflow_id, external_id, key, seq, step, status, detail)
         if not newly:
-            log.info("idempotent_replay", extra={"workflow_id": wf_id, "step": step, "seq": seq})
+            log.info("idempotent_replay", extra={"workflow_id": info.workflow_id, "step": step, "seq": seq})
+        return newly
 
     @activity.defn(name=shared.ACT_VALIDATE_INPUT)
     def validate_input(raw: dict, seq: int) -> dict:
@@ -85,7 +91,10 @@ def build_activities(deps: Deps) -> list:
         t0 = time.perf_counter()
         out = run_tool(name, p, deps.ctx, observations)
         T.record_tool(name, time.perf_counter() - t0)
-        result = out.model_dump()
+        # A tool may legitimately produce no observation (e.g. parse_salary on empty
+        # salary_raw returns None). Treat that as an empty observation rather than crashing
+        # on .model_dump(); finalize reads a falsy observation as "not applicable".
+        result = out.model_dump() if out is not None else {}
         _audit(p.external_id, seq, f"tool:{name}", "ok", {"tool": name})
         return result
 
@@ -125,8 +134,11 @@ def build_activities(deps: Deps) -> list:
 
     @activity.defn(name=shared.ACT_RECORD_EVENT)
     def record_event(external_id: str, seq: int, step: str, status: str, detail: dict) -> None:
-        _audit(external_id, seq, step, status, detail or {})
-        if status in _TERMINAL:
+        # Count the run outcome only when the audit row was *newly* inserted. On an activity
+        # retry (e.g. the result was lost after the DB write committed) the audit insert is a
+        # dedup no-op, and counting again would inflate conductor_runs_total.
+        newly = _audit(external_id, seq, step, status, detail or {})
+        if newly and status in _TERMINAL:
             T.count_run(status)
 
     return [validate_input, agent_decide, run_tool_activity, check_policy_activity,

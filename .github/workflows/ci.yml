@@ -61,14 +61,19 @@ jobs:
           cache: pip
       - name: Start Temporal + pgvector
         run: docker compose up -d temporal app-db
-      - name: Install package
-        run: pip install ./python
-      - name: Wait for Temporal to be healthy
+      - name: Install package (+dev, for pytest)
+        run: pip install ./python[dev]
+      - name: Wait for Temporal + app-db to be healthy
         run: |
-          for i in $(seq 1 40); do
-            s=$(docker inspect --format '{{.State.Health.Status}}' conductor-temporal-1 2>/dev/null || echo none)
-            echo "temporal: $s"; [ "$s" = "healthy" ] && break; sleep 3
-          done
+          wait_healthy() {
+            for _ in $(seq 1 40); do
+              s=$(docker inspect --format '{{.State.Health.Status}}' "$1" 2>/dev/null || echo none)
+              echo "$1: $s"; [ "$s" = "healthy" ] && return 0; sleep 3
+            done
+            echo "::error::$1 never became healthy"; docker compose logs "$2" --tail 100; return 1
+          }
+          wait_healthy conductor-temporal-1 temporal
+          wait_healthy conductor-app-db-1 app-db
       - name: Chaos test (SIGKILL worker -> resume)
         env:
           CONDUCTOR_CHAOS: "1"

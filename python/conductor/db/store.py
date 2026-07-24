@@ -62,6 +62,12 @@ class InMemoryStore(Store):
     def append_audit(self, workflow_id, external_id, idempotency_key, seq, step, status, detail) -> bool:
         key = (workflow_id, idempotency_key)
         if key in self._audit_keys:
+            # Replay/retry: refresh detail+status to the latest attempt (mirrors the pg
+            # DO UPDATE), but report it as not-newly-inserted so the caller dedups correctly.
+            for e in self._audit:
+                if e["workflow_id"] == workflow_id and e["idempotency_key"] == idempotency_key:
+                    e["detail"], e["status"] = detail, status
+                    break
             return False
         self._audit_keys.add(key)
         self._audit.append({

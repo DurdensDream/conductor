@@ -10,7 +10,9 @@ tuned for the intended CI provider (fake) but leave room for a noisier real mode
 from __future__ import annotations
 
 THRESHOLDS: dict[str, float] = {
-    "task_success": 0.90,
+    "task_success": 0.90,          # mean field-level accuracy (lenient: partial credit)
+    "task_success_strict": 0.75,   # fraction with EVERY field correct (no partial credit)
+    "review_routing_accuracy": 0.90,  # needs_review matches expected — the auto-ship/escalate call
     "tool_selection_f1": 0.90,
     "tool_selection_exact_order": 0.80,
     "output_validity": 0.99,
@@ -18,7 +20,10 @@ THRESHOLDS: dict[str, float] = {
     "llm_judge_quality": 0.60,
 }
 
-REQUIRED = ("task_success", "tool_selection_f1", "output_validity")
+# review_routing_accuracy is REQUIRED because the lenient mean task_success (routing is only
+# 1 of 5 fields, and few gold cases route) can stay green while the router is badly broken;
+# gating routing on its own closes that hole.
+REQUIRED = ("task_success", "review_routing_accuracy", "tool_selection_f1", "output_validity")
 
 
 def evaluate_gate(metrics: dict, thresholds: dict[str, float] | None = None) -> tuple[bool, list[str]]:

@@ -36,12 +36,17 @@ export default function Page() {
   const [busy, setBusy] = useState<string | null>(null);
   const [flash, setFlash] = useState("");
   const idRef = useRef(0);
+  const pollRef = useRef(0);
 
   const refresh = useCallback(async () => {
+    // Monotonic generation: with a 2s poll plus post-action refreshes, several /pending
+    // requests can be in flight. Drop any response that isn't the latest we issued, so a
+    // slow older response can't clobber newer queue state.
+    const gen = ++pollRef.current;
     try {
       const r = await fetch("/api/pending", { cache: "no-store" });
       const d = await r.json();
-      setItems(d.items || []);
+      if (gen === pollRef.current) setItems(d.items || []);
     } catch {
       /* transient; next tick retries */
     }
@@ -57,22 +62,38 @@ export default function Page() {
     idRef.current += 1;
     const external_id = `ui-${Date.now()}-${idRef.current}`;
     setFlash(`Submitted ${external_id}…`);
-    await fetch("/api/postings", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ source: "ui", external_id, ...body }),
-    });
+    try {
+      const r = await fetch("/api/postings", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ source: "ui", external_id, ...body }),
+      });
+      // fetch() does not throw on 4xx/5xx — check explicitly so a failed submit isn't
+      // silently reported as success.
+      setFlash(r.ok ? `Submitted ${external_id}…` : `Submit failed (${r.status}) for ${external_id}`);
+    } catch {
+      setFlash(`Submit failed (network) for ${external_id}`);
+    }
     setTimeout(refresh, 800);
   }
 
   async function decide(id: string, action: "approve" | "reject") {
     setBusy(id);
-    await fetch(`/api/postings/${encodeURIComponent(id)}/${action}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ reviewer: "ui", note: action }),
-    });
-    setFlash(`${action === "approve" ? "Approved" : "Rejected"} ${id}`);
+    try {
+      const r = await fetch(`/api/postings/${encodeURIComponent(id)}/${action}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reviewer: "ui", note: action }),
+      });
+      if (r.ok) {
+        setFlash(`${action === "approve" ? "Approved" : "Rejected"} ${id}`);
+      } else {
+        // 404 = already closed; 503 = Temporal unavailable; surface it rather than claim success.
+        setFlash(`${action} failed (${r.status}) for ${id} — refresh and retry`);
+      }
+    } catch {
+      setFlash(`${action} failed (network) for ${id}`);
+    }
     setBusy(null);
     setTimeout(refresh, 600);
   }

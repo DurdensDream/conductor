@@ -17,10 +17,19 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ActivityError
+from temporalio.exceptions import ActivityError, ApplicationError
 
 with workflow.unsafe.imports_passed_through():
     from . import constants, shared
+
+
+def _is_validation_error(err: ActivityError) -> bool:
+    """True only for the *intended* permanent failure: an activity that raised
+    ApplicationError(type="ValidationError"). Temporal also wraps retry-exhausted transient
+    failures (a flaky DB/LLM) in ActivityError, so a bare `except ActivityError` would
+    mislabel a transient outage as a permanent validation rejection. Inspect the cause."""
+    cause = err.cause
+    return isinstance(cause, ApplicationError) and cause.type == "ValidationError"
 
 
 def _retry() -> RetryPolicy:
@@ -55,13 +64,17 @@ class JobIntakeWorkflow:
     # ---- signals (HITL) ----
     @workflow.signal(name="approve")
     def approve(self, reviewer: str = "unknown", note: str = "") -> None:
-        if self._review_decision is None:
+        # Only honor a decision made *while the gate is armed*. A signal delivered before the
+        # workflow reaches PENDING_REVIEW (early client retry, operator racing the run) must
+        # not pre-satisfy the gate — that would auto-approve a policy-blocked record no human
+        # ever saw. The reviewer decides against the assembled record, not ahead of it.
+        if self._status == "PENDING_REVIEW" and self._review_decision is None:
             self._review_decision = {"approved": True, "reviewer": reviewer, "note": note}
             self._note("approve_received")
 
     @workflow.signal(name="reject")
     def reject(self, reviewer: str = "unknown", reason: str = "") -> None:
-        if self._review_decision is None:
+        if self._status == "PENDING_REVIEW" and self._review_decision is None:
             self._review_decision = {"approved": False, "reviewer": reviewer, "note": reason}
             self._note("reject_received")
 
@@ -124,8 +137,10 @@ class JobIntakeWorkflow:
                 shared.ACT_VALIDATE_INPUT, args=[inp.raw, self._next()],
                 start_to_close_timeout=_ACT_TIMEOUT, retry_policy=_RETRY,
             )
-        except ActivityError:
-            return await self._terminal("FAILED_VALIDATION", "input_rejected")
+        except ActivityError as err:
+            if _is_validation_error(err):
+                return await self._terminal("FAILED_VALIDATION", "input_rejected")
+            raise  # transient/infra failure — fail loudly & retryably, don't mislabel as invalid
         self._external_id = posting["external_id"]
 
         # ---- agentic loop: decide -> run tool -> observe (each an activity) ----
@@ -164,8 +179,10 @@ class JobIntakeWorkflow:
                 shared.ACT_FINALIZE_RECORD, args=[posting, observations, self._trajectory, self._next()],
                 start_to_close_timeout=_ACT_TIMEOUT, retry_policy=_RETRY,
             )
-        except ActivityError:
-            return await self._terminal("FAILED_VALIDATION", "record_invalid")
+        except ActivityError as err:
+            if _is_validation_error(err):
+                return await self._terminal("FAILED_VALIDATION", "record_invalid")
+            raise  # transient/infra failure — fail loudly & retryably, don't mislabel as invalid
         self._record = fin["record"]
         self._review_reason = fin["review_reason"]
 

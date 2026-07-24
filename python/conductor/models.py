@@ -62,12 +62,16 @@ class RawPosting(BaseModel):
     employment_type_raw: str = Field(default="", max_length=128)
     company: str = Field(default="", max_length=512)
 
-    @field_validator("title", "description", "location_raw", "salary_raw", "company")
+    @field_validator("title", "description", "location_raw", "salary_raw", "company", mode="before")
     @classmethod
     def _no_control_chars(cls, v: str) -> str:
-        # Strip control characters (a cheap prompt-injection / binary-blob guard). Newlines
-        # and tabs are allowed; the exotic C0 range is not.
-        return _CONTROL_CHARS.sub("", v)
+        # Strip control characters (a cheap prompt-injection / binary-blob guard) BEFORE the
+        # length constraints run, so a title of only control chars collapses to "" and then
+        # trips min_length=1 rather than sneaking past it. Newlines/tabs are allowed; the
+        # exotic C0 range is not.
+        if isinstance(v, str):
+            return _CONTROL_CHARS.sub("", v)
+        return v
 
 
 # ---------------------------------------------------------------- tool outputs

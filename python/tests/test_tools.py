@@ -33,6 +33,13 @@ def test_raw_posting_strips_control_chars():
     assert p.title == "Engineer"
 
 
+def test_raw_posting_rejects_title_of_only_control_chars():
+    # Control-char stripping runs BEFORE min_length, so an all-control-char title collapses
+    # to "" and trips the non-empty guard instead of sneaking through.
+    with pytest.raises(ValidationError):
+        _p(title="\x01\x02")
+
+
 def test_raw_posting_requires_nonempty_id_and_title():
     with pytest.raises(ValidationError):
         RawPosting(source="t", external_id="", title="x")
@@ -51,6 +58,13 @@ def test_location_unknown_still_positional():
     loc = run_tool("normalize_location", _p(location_raw="Smalltown, Country"), _ctx())
     assert loc.city == "Smalltown"
     assert loc.resolved
+
+
+def test_location_single_junk_token_is_unresolved():
+    # A single unrecognized token (no structure, not in the geocoder) must NOT be marked
+    # resolved — else garbage inflates confidence and skips the human-review gate.
+    loc = run_tool("normalize_location", _p(location_raw="Zzqqwx garbage"), _ctx())
+    assert not loc.resolved
 
 
 def test_location_empty_is_unresolved():

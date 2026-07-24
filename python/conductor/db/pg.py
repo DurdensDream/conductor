@@ -72,14 +72,20 @@ class PgStore:
 
     # ---- audit (idempotent) ----
     def append_audit(self, workflow_id, external_id, idempotency_key, seq, step, status, detail) -> bool:
+        # DO UPDATE (not DO NOTHING) so a retried non-deterministic activity refreshes the
+        # recorded detail/status to the attempt Temporal actually committed (the last one to
+        # run wins). `RETURNING (xmax = 0)` still tells insert (True) from update (False), so
+        # the caller's idempotency/replay signal — and the run-count metric — stay correct.
         with self._pool.connection() as conn:
-            cur = conn.execute(
+            row = conn.execute(
                 "INSERT INTO audit_log (workflow_id, external_id, idempotency_key, seq, step, status, detail) "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s) "
-                "ON CONFLICT (workflow_id, idempotency_key) DO NOTHING",
+                "ON CONFLICT (workflow_id, idempotency_key) "
+                "DO UPDATE SET detail = EXCLUDED.detail, status = EXCLUDED.status "
+                "RETURNING (xmax = 0) AS inserted",
                 (workflow_id, external_id, idempotency_key, seq, step, status, json.dumps(detail)),
-            )
-            return cur.rowcount > 0  # 0 => key already present (replay), no duplicate effect
+            ).fetchone()
+            return bool(row[0])  # True => newly inserted; False => row already existed (replay/retry)
 
     # ---- record (upsert) ----
     def upsert_record(self, external_id, record, status, confidence) -> None:

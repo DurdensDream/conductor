@@ -4,7 +4,9 @@ per-case results so they're unit-testable."""
 
 from __future__ import annotations
 
-from ..models import EnrichedPosting
+import json
+
+from ..models import EnrichedPosting, RemoteType
 
 
 def _field_matches(record: dict, expect: dict, needs_review: bool) -> tuple[int, int]:
@@ -39,7 +41,7 @@ def compute_metrics(results: list[dict]) -> dict:
 
     field_scores, strict_pass = [], 0
     f1s, exact_order = [], 0
-    valid_count = 0
+    valid_count, routing_correct = 0, 0
     total_tokens, total_cost = 0, 0.0
 
     for r in results:
@@ -51,6 +53,10 @@ def compute_metrics(results: list[dict]) -> dict:
         f1s.append(f1)
         if r["trajectory"] == r["expected_trajectory"]:
             exact_order += 1
+        # Review-routing is the product's whole point (auto-ship vs escalate); scored on its
+        # own so a broken router can't hide inside a lenient 5-field mean.
+        if bool(r["needs_review"]) == bool(r["expect"]["needs_review"]):
+            routing_correct += 1
         valid_count += 1 if r.get("valid") else 0
         total_tokens += r.get("tokens_in", 0) + r.get("tokens_out", 0)
         total_cost += r.get("cost_usd", 0.0)
@@ -59,6 +65,7 @@ def compute_metrics(results: list[dict]) -> dict:
         "n_cases": n,
         "task_success": round(sum(field_scores) / n, 4),          # mean field-level accuracy
         "task_success_strict": round(strict_pass / n, 4),          # all fields correct
+        "review_routing_accuracy": round(routing_correct / n, 4),  # needs_review matches expected
         "tool_selection_f1": round(sum(f1s) / n, 4),
         "tool_selection_exact_order": round(exact_order / n, 4),
         "output_validity": round(valid_count / n, 4),
@@ -68,8 +75,21 @@ def compute_metrics(results: list[dict]) -> dict:
 
 
 def validate_record(record: dict) -> bool:
+    """Output-validity check. Not a tautology: the record was already model-validated at
+    assembly, so re-validating the same object would always pass. Instead we validate it as
+    it would be PERSISTED and reloaded — round-tripped through JSON (the JSONB storage
+    contract) — and then assert the business invariants a schema-valid-but-empty record
+    could still violate (blank id/title, out-of-range confidence, no trajectory)."""
     try:
-        EnrichedPosting.model_validate(record)
-        return True
+        rec = EnrichedPosting.model_validate(json.loads(json.dumps(record)))
     except Exception:
         return False
+    if not rec.external_id or not rec.title:
+        return False
+    if not (0.0 <= rec.confidence <= 1.0):
+        return False
+    if rec.remote_type not in RemoteType.__members__.values():
+        return False
+    if not rec.trajectory:  # every run executes at least classify + dedup
+        return False
+    return True
