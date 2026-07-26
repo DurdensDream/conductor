@@ -10,8 +10,13 @@ Prometheus name-mangling (dots->_, unit suffix, histogram _bucket/_sum/_count):
   conductor.llm.latency    (s) -> conductor_llm_latency_seconds_*
   conductor.llm.tokens         -> conductor_llm_tokens_total
   conductor.llm.cost_usd       -> conductor_llm_cost_usd_total
+  conductor.submissions        -> conductor_submissions_total
   conductor.runs               -> conductor_runs_total
-  conductor.review.latency (s) -> conductor_review_latency_seconds_*
+
+Every instrument here has a caller; a metric nothing records is worse than no metric, because
+a dashboard panel over it reads as "healthy and idle". Pending-review depth deliberately isn't
+a metric: it lives in Temporal (GET /pending lists + queries it), and a per-process up/down
+counter would drift negative the first time a worker died while a run was parked.
 """
 
 from __future__ import annotations
@@ -24,7 +29,6 @@ log = logging.getLogger(__name__)
 
 _LAT_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10]
 _LLM_BUCKETS = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60]
-_REVIEW_BUCKETS = [1, 5, 30, 60, 300, 1800, 3600, 21600, 86400]
 
 
 class Telemetry:
@@ -36,10 +40,8 @@ class Telemetry:
         self.llm_latency = None
         self.tokens = None
         self.cost = None
+        self.submissions = None
         self.runs = None
-        self.agent_turns = None
-        self.review_latency = None
-        self.review_pending = None
 
     def init(self, service_name: str | None = None) -> None:
         s = get_settings()
@@ -82,7 +84,6 @@ class Telemetry:
             views=[
                 view("conductor.tool.latency", _LAT_BUCKETS),
                 view("conductor.llm.latency", _LLM_BUCKETS),
-                view("conductor.review.latency", _REVIEW_BUCKETS),
             ],
         )
         metrics.set_meter_provider(mp)
@@ -92,10 +93,8 @@ class Telemetry:
         self.llm_latency = m.create_histogram("conductor.llm.latency", unit="s")
         self.tokens = m.create_counter("conductor.llm.tokens")
         self.cost = m.create_counter("conductor.llm.cost_usd")
+        self.submissions = m.create_counter("conductor.submissions")
         self.runs = m.create_counter("conductor.runs")
-        self.agent_turns = m.create_histogram("conductor.agent.turns")
-        self.review_latency = m.create_histogram("conductor.review.latency", unit="s")
-        self.review_pending = m.create_up_down_counter("conductor.review.pending")
 
     # ---- record helpers (all safe when disabled) ----
     def record_tool(self, tool: str, seconds: float) -> None:
@@ -112,23 +111,17 @@ class Telemetry:
         if self.cost and cost_usd:
             self.cost.add(cost_usd, attrs)
 
+    def count_submission(self) -> None:
+        """Accepted at the edge. Separate instrument from `count_run` on purpose: mixing an
+        arrival count into `conductor.runs` would make "runs by outcome" count every run twice
+        (once on submit, once on its terminal outcome) and its sum meaningless."""
+        if self.submissions:
+            self.submissions.add(1)
+
     def count_run(self, outcome: str) -> None:
+        """One increment per run, at its TERMINAL outcome only (see `count_submission`)."""
         if self.runs:
             self.runs.add(1, {"outcome": outcome})
-
-    def record_turns(self, n: int) -> None:
-        if self.agent_turns:
-            self.agent_turns.record(n)
-
-    def review_enqueued(self) -> None:
-        if self.review_pending:
-            self.review_pending.add(1)
-
-    def review_resolved(self, seconds: float) -> None:
-        if self.review_pending:
-            self.review_pending.add(-1)
-        if self.review_latency:
-            self.review_latency.record(seconds)
 
 
 T = Telemetry()

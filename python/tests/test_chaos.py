@@ -1,12 +1,12 @@
-"""The reliability proof (FR-4 / spec §2.9) — the wow moment.
+"""The reliability proof (FR-4) — the wow moment.
 
 Runs against a REAL Temporal server + REAL pgvector Postgres (not the time-skipping mock).
 It: starts a workflow, lets the agent run every enrichment step and park in the durable
 HITL review gate, then SIGKILLs the worker process. A brand-new worker (sharing zero memory
 with the dead one) is started; it reconstructs the ENTIRE accumulated state — every tool
 observation, the assembled record, the full trajectory — purely by replaying Temporal event
-history. We approve, the workflow completes with byte-identical output, and the audit log
-shows no duplicate side effects.
+history. We approve, the workflow completes with the same enrichment record, and the audit
+log shows no duplicate side effects.
 
 Skipped unless CONDUCTOR_CHAOS=1 (needs live services); the CI chaos job sets it after
 `docker compose up temporal app-db`.
@@ -75,7 +75,7 @@ def _audit_keys(workflow_id: str) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_worker_crash_mid_run_resumes_with_identical_output():
+async def test_worker_crash_resumes_from_event_history_without_duplicate_effects():
     client = await Client.connect(TEMPORAL_ADDR)
     ext = f"chaos-{uuid.uuid4().hex[:8]}"
     wf_id = f"intake-{ext}"
@@ -118,7 +118,7 @@ async def test_worker_crash_mid_run_resumes_with_identical_output():
 
     # 1) resumed and completed
     assert result.status == "COMPLETED", result.status
-    # 2) identical enrichment output (durable state survived the kill)
+    # 2) the resumed run finishes on the same enrichment (durable state survived the kill)
     assert result.trajectory == pre_trajectory
     assert result.record["confidence"] == pre_record["confidence"]
     assert result.record["category"] == pre_record["category"]
@@ -126,7 +126,8 @@ async def test_worker_crash_mid_run_resumes_with_identical_output():
     post_keys = _audit_keys(wf_id)
     assert len(post_keys) == len(set(post_keys)), "duplicate audit rows — idempotency broken"
     assert set(pre_crash_keys) <= set(post_keys), "pre-crash audit rows lost"
-    assert any(k.endswith(":persist_record") for k in post_keys), "record was never persisted"
+    persists = [k for k in post_keys if k.endswith(":persist_record")]
+    assert len(persists) == 1, f"expected exactly one persist_record, got {persists}"
 
     # 4) the record is actually in the domain store
     with psycopg.connect(PG_DSN) as conn:

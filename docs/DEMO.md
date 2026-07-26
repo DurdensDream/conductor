@@ -40,9 +40,10 @@ Click **Approve** (or `POST /postings/demo-2/approve`) → the same workflow res
 docker compose kill -s SIGKILL worker
 # The run's state is safe in Temporal. Bring a fresh worker back:
 docker compose up -d worker
-# Approve in the UI — it resumes on the NEW worker with identical output.
+# Approve in the UI — it resumes on the NEW worker, still showing the same proposed record.
 ```
-Automated version (asserts identical output + no duplicate side effects):
+Automated version (one `SIGKILL`, asserts the fresh worker rebuilds the run from event
+history and finishes it with no duplicate side effects):
 ```bash
 docker compose up -d temporal app-db
 make chaos
@@ -50,15 +51,17 @@ make chaos
 
 ## 4. Traces & dashboards
 - **Jaeger** → service `conductor-worker` → newest `RunWorkflow` trace: per-activity spans
-  (`agent_decide`, `run_tool`, `check_policy`, `finalize_record`, `persist_record`) with
-  LLM token/cost attributes.
-- **Grafana** → "Conductor — Agent Runs & Cost": runs by outcome, tool latency p95, tokens, cost.
+  (`agent_decide`, `run_tool`, `check_policy`, `finalize_record`, `persist_record`) from
+  Temporal's OTel interceptor — step structure and latency. Token/cost are metrics, so read
+  those in Grafana, not on the spans.
+- **Grafana** → "Conductor — Agent Runs & Cost": runs by terminal outcome, tool latency p95,
+  tokens, cost, submitted-vs-terminal counts.
 - **Temporal UI** → the workflow's full event history (every activity, signal, timer).
 
 ## Run it with a real model
 ```bash
 # Local (Ollama on the host):
-LLM_PROVIDER=ollama OLLAMA_MODEL=qwen3.5:9b docker compose up -d --build
+LLM_PROVIDER=ollama OLLAMA_MODEL=qwen2.5:7b docker compose up -d --build
 # Cloud quality:
 LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-... docker compose up -d --build
 ```

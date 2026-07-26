@@ -8,7 +8,7 @@
   "panels": [
     {
       "id": 1,
-      "title": "Runs by outcome (rate)",
+      "title": "Runs by terminal outcome (rate)",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
@@ -18,7 +18,7 @@
     },
     {
       "id": 2,
-      "title": "Total runs by outcome",
+      "title": "Total runs by terminal outcome",
       "type": "stat",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
@@ -59,11 +59,14 @@
     },
     {
       "id": 6,
-      "title": "Pending review queue depth",
+      "title": "Submitted vs terminal runs",
       "type": "stat",
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
       "gridPos": { "h": 6, "w": 12, "x": 12, "y": 16 },
-      "targets": [{ "expr": "sum(conductor_review_pending)", "legendFormat": "pending" }]
+      "targets": [
+        { "expr": "sum(conductor_submissions_total)", "legendFormat": "submitted" },
+        { "expr": "sum(conductor_runs_total)", "legendFormat": "terminal" }
+      ]
     }
   ]
 }

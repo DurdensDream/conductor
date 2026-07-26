@@ -106,7 +106,7 @@ async def submit(req: SubmitReq) -> dict:
             status_code=409,
             detail=f"posting {req.external_id!r} already has an in-flight intake ({_wf_id(req.external_id)})",
         ) from err
-    T.count_run("submitted")
+    T.count_submission()
     return {"external_id": req.external_id, "workflow_id": handle.id, "run_id": handle.result_run_id}
 
 

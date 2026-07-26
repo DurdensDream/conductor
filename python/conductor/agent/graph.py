@@ -1,11 +1,12 @@
 """The inner agent's per-turn decision graph (LangGraph).
 
 One invocation = one decision: given the posting + what's been done so far, pick the next
-tool or finish. The graph is: propose (LLM structured output) -> validate (is the choice
-a real, not-yet-run tool?) -> repair (bounded deterministic fallback) -> END. Temporal
-drives the loop *across* turns, so each tool call is its own durable activity — that's why
-this graph runs to completion inside a single activity with no checkpointer (durability is
-Temporal's job, per the verified guidance).
+tool or finish. Two nodes — `propose` (LLM structured output) and `repair` (a bounded
+deterministic fallback) — joined by one conditional edge whose `route` function validates the
+proposal (is the choice a real, not-yet-run, runnable tool?) and either ENDs, re-proposes
+while attempts remain, or drops to `repair`. Temporal drives the loop *across* turns, so each
+tool call is its own durable activity — that's why this graph runs to completion inside a
+single activity with no checkpointer (durability is Temporal's job).
 
 We use structured-output routing (LLM emits an AgentDecision) rather than native
 function-calling because it is far more reliable on small local models (llama3.2:3b)."""

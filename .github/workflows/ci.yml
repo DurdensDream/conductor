@@ -48,8 +48,9 @@ jobs:
           name: eval-metrics
           path: python/metrics.json
 
-  # The reliability proof: real Temporal + pgvector, SIGKILL the worker mid-run, assert
-  # it resumes with identical output and no duplicate side effects.
+  # The reliability proof: real Temporal + pgvector, SIGKILL the worker while a run is
+  # parked at the review gate, assert a fresh worker rebuilds the run from event history
+  # and finishes it with no duplicate side effects.
   chaos:
     runs-on: ubuntu-latest
     needs: lint-test

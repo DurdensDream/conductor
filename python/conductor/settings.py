@@ -19,7 +19,11 @@ class Settings(BaseSettings):
     # ---- Temporal ----
     temporal_address: str = "temporal:7233"
     temporal_namespace: str = "default"
-    task_queue: str = "conductor-intake"
+    # The task queue is NOT here: worker and API must agree on it, so it is a shared constant
+    # (`temporal/shared.py`), and the activity retry/timeout knobs live in
+    # `temporal/constants.py` because the workflow sandbox can't read env. Keeping an
+    # env-settable copy of either here would give two sources of truth, one of them dead.
+    #
     # Bound the worker's wait for its two dependencies (Temporal + Postgres) at boot.
     startup_connect_timeout_seconds: float = 60.0
 
@@ -52,16 +56,6 @@ class Settings(BaseSettings):
     confidence_threshold: float = 0.70  # below this (or policy BLOCK) -> human review
     dedup_score_threshold: float = 0.90  # cosine >= this counts as a near-duplicate
     review_sla_seconds: int = 86_400  # 24h; no decision -> REVIEW_TIMED_OUT
-    max_output_validation_attempts: int = 3
-
-    # ---- Activity retry/timeout defaults (seconds) ----
-    activity_start_to_close_seconds: int = 60
-    llm_activity_start_to_close_seconds: int = 120
-    activity_max_attempts: int = 4
-
-    # ---- API ----
-    api_host: str = "0.0.0.0"
-    api_port: int = 8000
 
     # ---- Observability ----
     otel_exporter_otlp_endpoint: str = "http://otel-collector:4317"

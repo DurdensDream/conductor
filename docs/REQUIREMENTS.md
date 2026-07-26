@@ -18,24 +18,27 @@ fresh evidence, not asserted.
 Most "AI agents" are single-turn wrappers that silently fail. A production agent is a
 distributed system: it needs durable state, retries, idempotency, compensation,
 approval gates, guardrails, tracing, and evaluation. Conductor builds one the right way
-and *proves* reliability by killing it mid-run and watching it recover with identical
-output.
+and *proves* reliability by killing its worker and watching a fresh process rebuild the
+run from event history and finish it without duplicating a single side effect.
 
 **Primary goal:** an agent that takes a raw, messy job posting and produces a clean,
 validated, enriched record — routing genuinely-uncertain cases to a human — while being
 durable, observable, and continuously evaluated.
 
-**Quantified outcome to publish** (README headline): *"X% of postings auto-resolved
-end-to-end without human touch; ~Y minutes of manual triage saved per 100 postings;
-0 lost/duplicated work across N injected worker crashes."*
+**Quantified outcome to publish** (README headline): the auto-resolution rate on the gold
+set, and the crash-and-resume result. As shipped that is *"72% of gold postings (13 / 18)
+auto-resolve with no human touch, the other 5 route correctly; the injected `SIGKILL`
+loses no run and duplicates no side effect."* A "minutes of triage saved" figure was
+considered and dropped — nothing in this repo measures human handling time, so it would
+be invented.
 
 ---
 
 ## 2. Domain (fixed for MVP, kept swappable)
 
-**Job-posting intake & enrichment** — authentic to the author's day job (Joveo:
-Kafka/Debezium/OpenSearch/Postgres job pipelines), so every layer is defensible in an
-interview.
+**Job-posting intake & enrichment** — a domain the author has worked in production
+(Kafka/Debezium/OpenSearch/Postgres job pipelines), so the messiness of the inputs and the
+cost of a wrong auto-ship are real rather than invented.
 
 Input: one raw posting (free-text title/description + loosely-typed fields: location
 string, salary string, employment type, company, source).
@@ -44,9 +47,8 @@ currency, an O\*NET-style category, a remote/hybrid/onsite flag, a dedupe verdic
 (is this a near-duplicate of an existing posting?), policy flags, and a confidence
 score — plus an append-only audit log of every step.
 
-Swappability is a *design* property (see DESIGN §"Domain seam"), not an MVP feature: the
-tool set, the Pydantic contracts, and the gold eval set are the only domain-specific
-parts; the durable orchestration, HITL, guardrail, eval, and observability machinery are
+Swappability is a *design* property, not an MVP feature: the tool set, the Pydantic
+contracts, and the gold eval set are the only domain-specific parts; the durable orchestration, HITL, guardrail, eval, and observability machinery are
 domain-agnostic.
 
 ---
@@ -59,13 +61,15 @@ and a docstring the LLM sees. MVP tool set (5):
 1. `normalize_location(raw) -> Location` — parse a location string into
    city/state/country/lat-lon-less structured form + a `remote_type` flag.
 2. `parse_salary(raw) -> SalaryRange | None` — parse "$80k–$100k/yr", "45000 EUR", etc.
-   into min/max/currency/period; deterministic first, LLM fallback.
+   into min/max/currency/period; deterministic regex only (no LLM), and an unparseable
+   string returns `parsed=False` rather than a guess.
 3. `classify_category(title, description) -> Category` — map to an O\*NET-style
    taxonomy code + label; LLM structured output.
 4. `search_duplicates(text) -> list[DuplicateHit]` — embed the posting and vector-search
    existing postings (pgvector) for near-duplicates above a similarity threshold.
 5. `check_policy(posting) -> PolicyVerdict` — flag discriminatory language, salary
-   sanity violations, and banned terms (deterministic rules + optional LLM judgment).
+   sanity violations, and banned terms (deterministic rules only; an LLM layer could add
+   nuance later but must never downgrade a rule-based BLOCK — fail-closed).
 
 **AC-1:** each tool has a Pydantic input+output model; calling a tool with malformed
 input raises a typed validation error (never a raw 500); a unit test exercises each
@@ -74,8 +78,9 @@ tool's happy path and one invalid input.
 ### FR-2 — Agentic decision loop (LangGraph)
 An LLM-driven agent decides *which* tools to call and *in what order* for a given
 posting, observes each result, and produces a final structured `EnrichedPosting`.
-Implemented as a LangGraph graph (plan → act → observe → finalize) whose tool execution
-and LLM inference are delegated to the durable layer (see FR-3).
+Implemented as a LangGraph graph that decides **one turn at a time** (propose → validate →
+repair), whose tool execution and LLM inference are delegated to the durable layer, which
+drives the act → observe loop across turns (see FR-3).
 
 **AC-2:** given a posting missing salary + location, the agent calls the corresponding
 tools and returns a valid `EnrichedPosting`; the *trajectory* (ordered list of tool
@@ -93,27 +98,34 @@ record, and `signal`s for approve/reject/cancel. Activities have explicit
 the third attempt) still completes the run.
 
 ### FR-4 — Chaos / reliability proof (the wow moment)
-A test starts a run, lets it complete some activities, **kills the worker process
-mid-run**, restarts a fresh worker, and asserts the workflow **resumes and completes with
-byte-identical output** — and that already-completed activities did **not** re-execute
-(proven via a persisted side-effect counter, not just equal output).
+A test starts a run, lets it complete every enrichment activity and park in the review
+gate, **kills the worker process**, restarts a fresh worker, and asserts the workflow
+**rebuilds the whole run from Temporal event history** — trajectory and proposed record, in
+a process sharing no memory with the dead one — and **resumes to completion without
+duplicating a side effect**.
 
 **AC-4:** this test passes in CI against a real Temporal server (not only the
-time-skipping mock), the worker is killed via `SIGKILL` (not a graceful shutdown), and
-the assertion includes both "output identical" and "no duplicate side effects."
+time-skipping mock), the worker is killed via `SIGKILL` (not a graceful shutdown), and the
+assertions cover both recovery (same trajectory, confidence and category after the crash)
+and non-duplication (every audit `idempotency_key` unique under the DB `UNIQUE` constraint,
+every pre-crash row still present, exactly one `persist_record`). Note what is *not*
+claimed: nothing counts LLM calls across the kill, so "completed activities did not
+re-execute" is a property of Temporal's replay semantics rather than a number this test
+measures.
 
 ### FR-5 — Guardrails
 - **Input guardrail:** raw input validated/coerced by Pydantic; unparseable or abusive
   input (oversized, injection-shaped) is rejected with a typed error before any LLM call.
-- **Output guardrail:** the final record must parse as `EnrichedPosting` (enforced
-  structured output); a run that can't produce a valid record after N attempts ends in a
-  terminal `FAILED_VALIDATION` state, never emits a half-record.
+- **Output guardrail:** the final record must parse as `EnrichedPosting`. Bounded retries
+  apply to the LLM's decision JSON; a record that cannot be assembled is a permanent
+  (non-retryable) error and ends the run in a terminal `FAILED_VALIDATION` state, never a
+  half-record.
 - **Policy check:** a dedicated step flags policy issues; a policy *block* forces the
   human-review route regardless of confidence.
 
 **AC-5:** an oversized/garbage input is rejected pre-LLM; a crafted posting with a banned
-term is forced to human review; a forced-invalid LLM output ends `FAILED_VALIDATION`
-with the audit log showing the retries.
+term is forced to human review; an input that cannot yield a valid record ends
+`FAILED_VALIDATION` with the audit log showing the rejection and nothing persisted.
 
 ### FR-6 — Human-in-the-loop (HITL)
 Low-confidence (or policy-blocked) items pause via a Temporal signal wait with an SLA
@@ -138,19 +150,23 @@ trajectories. Metrics computed per run and aggregated:
 Thresholds live in one `THRESHOLDS` dict (single source of truth, published in README);
 the gate fails on missing required metrics or an empty gold set (never vacuously green).
 
-**AC-7:** `python -m conductor.eval --gate` runs the gold set through the real workflow
-(with the deterministic LLM), prints metrics, and exits non-zero below thresholds; CI
-runs it and blocks merge on failure.
+**AC-7:** `python -m conductor.eval --gate` runs the gold set through the in-process agent
+runner (same graph, tools and finalize logic the workflow calls, with the deterministic
+LLM), prints metrics, and exits non-zero below thresholds; CI runs it and blocks merge on
+failure. Orchestration correctness is covered by the time-skipping workflow tests and the
+chaos test, not by the eval.
 
 ### FR-8 — Observability
-- OpenTelemetry traces: one span per workflow, per agent turn, per activity (tool/LLM),
-  with token counts + cost as span attributes (GenAI semantic conventions) → **Jaeger**.
-- Metrics: runs by outcome, per-tool latency, tokens, cost, HITL queue depth, review
-  latency → Prometheus → **Grafana** dashboard.
+- OpenTelemetry traces: one span per workflow and per activity (tool/LLM), emitted by
+  Temporal's own `TracingInterceptor` → **Jaeger**. Traces carry step structure and
+  latency; token counts and cost are *metrics*, not span attributes.
+- Metrics: submissions, runs by terminal outcome, per-tool latency, LLM latency, tokens,
+  cost → Prometheus → **Grafana** dashboard. Every instrument must have a caller; pending-
+  review depth is read from Temporal (`GET /pending`), not published as a counter.
 - Temporal Web UI shows the durable event history for any run.
 
-**AC-8:** after a demo run, Jaeger shows the full per-step trace with token/cost
-attributes; Grafana shows run-outcome + cost panels; Temporal UI shows the history.
+**AC-8:** after a demo run, Jaeger shows the full per-step trace; Grafana shows
+terminal-outcome, latency, token and cost panels; Temporal UI shows the history.
 Telemetry degrades to a safe no-op when disabled/unreachable (never crashes a run).
 
 ### FR-9 — One-command boot
@@ -163,7 +179,7 @@ can be submitted via the API and driven to completion, with no manual steps beyo
 defaults.
 
 ### FR-10 — Documentation
-README with: one-line what + demo GIF; architecture diagram; design decisions ("why
+README with: one-line what + a link to the 90-second demo script; architecture diagram; design decisions ("why
 durable execution", "why the workflow drives the agent loop", "why pgvector"); the
 **failure-mode table**; the chaos-proof description; published metrics; one-command run;
 "what I'd do next." Plus `DESIGN.md`, `PLAN.md`, `docs/DEMO.md`, `docs/METRICS.md`.
@@ -185,8 +201,8 @@ survives each; every metric in the README matches `gate.py`.
   with zero code change; model aliases are bare (`claude-haiku-4-5`), never date-pinned.
 - **NFR-5 Safety of demo:** default local models (Ollama), no secrets required to run the
   base demo; API keys only to opt into a cloud provider.
-- **NFR-6 Resource budget:** runs on a 16 GB Apple-Silicon Mac under Docker Desktop; JVM
-  heaps pinned; CPU-only torch; base stack (no obs) fits comfortably in 8 GB.
+- **NFR-6 Resource budget:** runs on a 16 GB Apple-Silicon Mac under Docker Desktop; no JVM
+  in the stack; CPU-only torch; base stack (no obs) fits comfortably in 8 GB.
 - **NFR-7 Reproducibility:** SHA-pinned or minor-pinned images; `uv`/pip lockable Python;
   `package-lock.json` + `npm ci` for the UI.
 
@@ -207,8 +223,8 @@ survives each; every metric in the README matches `gate.py`.
 ## 6. Definition of done (rolls up the ACs)
 
 `docker compose up` boots the stack · the agent completes intake on real inputs ·
-killing the worker mid-run resumes with identical output and no duplicate side effects
-(CI-asserted) · low-confidence items route to the approval UI and resume on approval ·
-the eval harness runs in CI and gates merges · Jaeger shows per-step traces with cost ·
-Grafana shows run/cost dashboards · README documents ≥6 failure modes + a quantified
-outcome · a 60–90s demo (GIF/script) shows the crash-and-resume.
+`SIGKILL`ing the worker leaves the run recoverable from event history and duplicates no
+side effect (CI-asserted) · low-confidence items route to the approval UI and resume on
+approval · the eval harness runs in CI and gates merges · Jaeger shows per-step traces ·
+Grafana shows run/token/cost dashboards · README documents ≥6 failure modes + a quantified
+outcome · a 60–90s demo script (`DEMO.md`) walks the crash-and-resume.

@@ -4,7 +4,7 @@ Uses the typed python client (>=0.6): `resp.message.content`, and native structu
 output via `format=<json schema>` — which is the reliable path on small models
 (llama3.2:3b's native function-calling is not dependable; JSON-schema-constrained
 output is). For a higher-quality local demo, point `OLLAMA_MODEL` at a larger
-tool-tuned model (e.g. qwen3.5:9b)."""
+tool-tuned model (e.g. qwen2.5:7b)."""
 
 from __future__ import annotations
 

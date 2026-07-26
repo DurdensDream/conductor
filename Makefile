@@ -1,4 +1,4 @@
-.PHONY: up down nuke logs obs-up test lint eval chaos ui-build fmt venv
+.PHONY: up obs-up down nuke logs worker api test lint eval chaos ui-build
 
 # ---- stack ----
 up:            ## boot the base stack (Temporal + Postgres + worker + API + UI)

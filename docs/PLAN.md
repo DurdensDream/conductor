@@ -1,14 +1,22 @@
 # Conductor — Implementation Plan
 
+> **This is the plan as written before coding**, kept for the record. Where the build
+> diverged from it, [`DESIGN.md`](DESIGN.md) and the code are authoritative — notably the
+> agent graph (`propose`/`repair`, not `plan`/`finalize`), the idempotency mechanism (a
+> `UNIQUE (workflow_id, idempotency_key)` constraint, not a side-effect counter table), the
+> eval harness (drives the in-process agent runner, not the Temporal workflow — orchestration
+> is covered by the workflow + chaos tests), and token/cost (emitted as metrics, not as
+> span attributes).
+
 Build order is chosen so that **each phase ends in something runnable and verifiable**,
 and so the durability/chaos property is provable as early as possible. Maps the brief's
 4-week plan onto build phases; every phase lists its *verification* (fresh evidence, not
-assertion — the StreamRAG discipline).
+assertion).
 
 Reuse-first: pull the LLM adapter, settings, telemetry, eval-gate shape, and UI scaffold
-from `~/Desktop/StreamRAG`; pull the Temporal Compose stack + worker/workflow idioms +
-time-skipping tests from `~/Desktop/temporal-order-workflow`. Write new code only where
-the domain differs.
+from the author's `StreamRAG` project; pull the Temporal Compose stack + worker/workflow
+idioms + time-skipping tests from `temporal-order-workflow`. Write new code only where the
+domain differs.
 
 ---
 
@@ -67,8 +75,8 @@ the domain differs.
 - **Verify:** each fix has a before/after evidence line; full suite + chaos + eval green.
 
 ## Phase 6 — Ship
-- Squash-free, single-line commits. Create private repo under **DurdensDream only**;
-  push. Confirm no `joveo` email in any commit; confirm `.env`/secrets git-ignored.
+- Squash-free, single-line commits. Push to the repo; confirm `.env`/secrets git-ignored
+  and no credentials in history.
 
 ---
 
@@ -77,14 +85,14 @@ the domain differs.
   no model, no GPU `[NFR-3]`. Ollama is the *local demo* default; Anthropic opt-in.
 - **Determinism:** nothing non-deterministic in the workflow module `[NFR-1]`.
 - **Every side effect idempotent + keyed** `[NFR-2]`.
-- **Commit style:** single-line messages, no body, no Co-Authored-By, DurdensDream identity.
+- **Commit style:** single-line messages, no body.
 - **No "done" without fresh evidence.**
 
 ---
 
 ## Verified dependency versions & API notes
-Verified against live registries/docs on 2026-07-23 (a dedicated verification pass —
-knowledge cutoff was Jan 2026, so this caught three things stale copy-paste would break).
+Verified against live registries/docs on 2026-07-23 — a dedicated pass that caught three
+things stale copy-paste would have broken.
 
 **Python (pin exact — `temporalio` and `anthropic` move ~bi-weekly):**
 - `temporalio==1.30.0` — API stable, **but** `RetryPolicy` imports from `temporalio.common`
@@ -92,9 +100,8 @@ knowledge cutoff was Jan 2026, so this caught three things stale copy-paste woul
 - `langgraph==1.2.9` (on the 1.x line since late 2025). `StateGraph`/`add_node`/`add_edge`/
   `add_conditional_edges`/`compile` unchanged — we use these. `create_react_agent` is
   **deprecated** (→ `langchain.agents.create_agent`); we don't use it. `interrupt()` needs
-  a checkpointer + thread_id — we deliberately do HITL at the Temporal layer instead
-  (research explicitly endorsed this: don't rely on LangGraph's checkpointer for
-  cross-activity durability).
+  a checkpointer + thread_id — we deliberately do HITL at the Temporal layer instead, so
+  LangGraph's checkpointer is never load-bearing for cross-activity durability.
 - `pydantic>=2.7`, `pydantic-settings>=2.3`, `psycopg[binary]>=3.2`, `pgvector>=0.3`,
   `fastapi>=0.115`, `uvicorn[standard]>=0.30`, `httpx>=0.27`, `numpy>=1.26`,
   `ollama>=0.6`, `anthropic>=0.40`, OTel SDK `>=1.30` + OTLP-gRPC exporter + FastAPI instr.
@@ -102,7 +109,7 @@ knowledge cutoff was Jan 2026, so this caught three things stale copy-paste woul
   (CI uses the fake hash embedder).
 - `llama3.2:3b` confirmed unreliable for native tool-calling → we route tool selection via
   `format=`/JSON-schema structured output, keep schemas small/flat, and default CI to the
-  fake LLM. `qwen3.5:9b` (present locally) is the recommended local model for a quality demo.
+  fake LLM. `qwen2.5:7b` is the recommended local model for a quality demo.
 
 **Docker images (pin — some `latest` tags are stale):**
 - `temporalio/auto-setup:1.29.7` (⚠️ `latest` frozen at 1.29.3), `temporalio/ui:2.52.1`.

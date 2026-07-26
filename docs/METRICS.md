@@ -29,19 +29,30 @@ routing is only one of the five fields inside `task_success`.
 
 ## Reliability (the headline outcome)
 
-- **Auto-resolution rate (gold set):** 11 / 18 postings (~61%) complete end-to-end with **no
-  human touch**; the other 7 correctly route to review (2 policy-block, 4 low-confidence,
+- **Auto-resolution rate (gold set):** 13 / 18 postings (72%) complete end-to-end with **no
+  human touch**; the other 5 correctly route to review (2 policy-block, 2 low-confidence,
   1 near-duplicate). A wrapper would either auto-ship all 18 (including the discriminatory
-  one) or dump all 18 on a human.
-- **Chaos proof:** across the CI chaos test, **0** workflows are lost or produce duplicate
-  side effects when the worker is `SIGKILL`ed mid-run — asserted by (a) byte-identical output
-  and (b) exactly one audit row per logical step (DB `UNIQUE` constraint).
+  one) or dump all 18 on a human. These counts are recomputed from `gold.py` and asserted
+  against this file by `test_documented_split_matches_gold`, so they cannot rot.
+- **Chaos proof:** the CI chaos test injects **one** `SIGKILL`, on one posting, while its run
+  is parked at the review gate — i.e. after every activity has completed. It asserts the run
+  is neither lost nor duplicated: a fresh worker rebuilds the trajectory + proposed record
+  from event history alone, the run then completes on approval, and the audit log holds one
+  row per logical step (unique `idempotency_key`, enforced by a DB `UNIQUE` constraint).
 
 ## Observability (live under `make obs-up`)
 
-- **Jaeger** (`:16686`): one trace per run — `RunWorkflow` → `StartActivity:agent_decide` →
-  `StartActivity:run_tool` … with LLM token/cost attributes (Temporal OTel interceptor).
-- **Prometheus** (`:9090`) / **Grafana** (`:3001`): `conductor_runs_total` by outcome,
-  `conductor_tool_latency_seconds`, `conductor_llm_tokens_total`, `conductor_llm_cost_usd_total`,
-  `conductor_review_pending`. Verified live: e.g. `conductor_llm_tokens_total{direction="in"}`
-  populated after one run.
+- **Jaeger** (`:16686`, service `conductor-worker`): one trace per run — `RunWorkflow:…` →
+  `StartActivity:agent_decide` / `RunActivity:agent_decide` → `…:run_tool` … All spans come
+  from Temporal's `TracingInterceptor` (no hand-rolled spans), so the trace gives step
+  structure and per-activity latency; **token counts and cost are metrics, not span
+  attributes** — read them from Prometheus/Grafana below.
+- **Prometheus** (`:9090`) / **Grafana** (`:3001`): `conductor_runs_total` by *terminal* outcome
+  (one increment per run; arrivals are counted separately by `conductor_submissions_total`, so
+  the outcome breakdown isn't double-counted), `conductor_tool_latency_seconds`,
+  `conductor_llm_latency_seconds`, `conductor_llm_tokens_total`, `conductor_llm_cost_usd_total`.
+  Verified live: e.g. `conductor_llm_tokens_total{direction="in"}` populated after one run.
+  Every instrument in [`obs/telemetry.py`](../python/conductor/obs/telemetry.py) has a caller —
+  pending-review depth is deliberately *not* a metric: `GET /pending` reads it from Temporal,
+  which is the source of truth, and a per-process up/down counter would go negative the first
+  time a worker died while a run was parked.

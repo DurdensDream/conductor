@@ -1,6 +1,6 @@
 """Deterministic, offline LLM. The spine of hermetic CI (NFR-3): no network, no model,
-no GPU, byte-identical output for identical input — which is also what makes the chaos
-test's "resumes with identical output" assertion airtight.
+no GPU, byte-identical output for identical input — which is also what lets the chaos test
+compare the pre-crash and post-resume record at all, instead of chasing model drift.
 
 It is *content-aware*, not a constant: it inspects the schema it's asked to fill and the
 prompt it's given, then emits a sensible structured object. That means the agent's
