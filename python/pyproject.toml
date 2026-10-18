@@ -11,8 +11,8 @@ dependencies = [
     # durable execution (pin exact — the SDK moves ~bi-weekly)
     "temporalio==1.30.0",
     # inner agent graph (1.x line; we use StateGraph, not the deprecated create_react_agent)
-    "langgraph>=1.0,<2",
-    "langchain-core>=1.0,<2",
+    "langgraph>=1.0.10rc1,<2",
+    "langchain-core>=0.3.81,<2",
     # app postgres + pgvector dedup corpus
     "psycopg[binary]>=3.2",
     "psycopg-pool>=3.2",
